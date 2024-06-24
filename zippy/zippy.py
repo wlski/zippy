@@ -4,8 +4,7 @@
 # (C) 2023 Thinkst Applied Research, PTY
 # Author: Jacob Torrey <jacob@thinkst.com>
 
-import time
-import lzma, argparse, os, itertools
+import lzma, argparse
 from zlib import compressobj, Z_FINISH
 from brotli import compress as brotli_compress, MODE_TEXT
 from numpy import array_split
@@ -17,6 +16,7 @@ from typing import List, Optional, Tuple, TypeAlias
 from multiprocessing import Pool, cpu_count
 from importlib.resources import files
 from .__init__ import __version__
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 Score : TypeAlias = tuple[str, float]
 
@@ -161,7 +161,6 @@ class LzmaLlmDetector(AIDetector):
                 self.prelude_str = fp.read()
             self.prelude_ratio = self._compress(self.prelude_str)
             return
-            #print(prelude_file + ' ratio: ' + str(self.prelude_ratio))
 
         if prelude_str != None:
             self.prelude_str = prelude_str
@@ -185,16 +184,13 @@ class LzmaLlmDetector(AIDetector):
         '''
         if self.prelude_ratio == 0.0:
             return None
-        #print('LZMA: ' + str((self.prelude_ratio, sample_score)))
+
         delta = self.prelude_ratio - (self._compress(self.prelude_str + sample) - (self.nf * len(sample) * (len(sample) / len(self.prelude_str))))
         determination = 'AI'
         if delta < 0:
             determination = 'Human'
 
         return (determination, abs(delta * 100))
-    
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, List, Tuple
         
 class Zippy:
     '''
@@ -230,7 +226,6 @@ class Zippy:
         '''Given a filename (and an optional number of decimal places to round to) returns the score for the contents of that file'''
         with open(filename, 'r', encoding='utf-8') as fp:
             txt = fp.read()
-            #print('Calculating score for input of length ' + str(len(txt)))
         return self.detector.score_text(txt)
 
     def _score_chunk(self, c : str, prelude_file : Optional[str] = None, prelude_ratio : Optional[float] = None) -> Score:
@@ -250,43 +245,7 @@ class Zippy:
             contents = fp.read()
         return (filename, self.run_on_text_chunked(contents, chunk_size, prelude_ratio=prelude_ratio))
 
-    # def run_on_text_chunked(self, s : str, chunk_size : int = 1500, prelude_file : Optional[str] = None, prelude_ratio : Optional[float] = None) -> Optional[Score]:
-    #     '''
-    #     Given a string (and an optional chunk size and number of decimal places to round to) returns the score for the passed string.
-    #     This function chunks the input into at most chunk_size parts to score separately, then returns an average. This prevents a very large input
-    #     being skewed because its compression ratio starts to overwhelm the prelude file.
-    #     '''
-    #     contents = clean_text(s)
-
-    #     start = 0
-    #     end = 0
-    #     chunks = []
-    #     while start + chunk_size < len(contents) and end != -1:
-    #         end = contents.rfind(' ', start, start + chunk_size + 1)
-    #         chunks.append(contents[start:end])
-    #         start = end + 1
-    #     chunks.append(contents[start:])
-    #     scores = []
-    #     if len(chunks) > 2:
-    #         with Pool(cpu_count()) as pool:
-    #             for r in pool.starmap(self._score_chunk, zip(chunks, itertools.repeat(prelude_file), itertools.repeat(prelude_ratio))):
-    #                 scores.append(r)
-    #     else:
-    #         for c in chunks:
-    #             scores.append(self._score_chunk(c, prelude_file=prelude_file, prelude_ratio=prelude_ratio))
-    #     ssum : float = 0.0
-    #     for i, s in enumerate(scores):
-    #         if s[0] == 'AI':
-    #             ssum -= s[1] * (len(chunks[i]) / len(contents))
-    #         else:
-    #             ssum += s[1] * (len(chunks[i]) / len(contents))
-    #     sa : float = ssum
-    #     if sa < 0:
-    #         return ('AI', abs(sa))
-    #     else:
-    #         return ('Human', abs(sa))
-
-    def run_on_text_chunked(self, s: str, chunk_size: int = 1500, prelude_file: Optional[str] = None, prelude_ratio: Optional[float] = None):
+    def run_on_text_chunked(self, s: str, chunk_size: int = 1500, prelude_file: Optional[str] = None, prelude_ratio: Optional[float] = None) -> Optional[Tuple[str, float]]:
         '''
         Given a string (and an optional chunk size and number of decimal places to round to) returns the score for the passed string.
         This function chunks the input into at most chunk_size parts to score separately, then returns an average. This prevents a very large input
@@ -388,7 +347,6 @@ class EnsembledZippy:
         return self._combine_scores(scores)
 
 def main():
-    start_time = time.perf_counter()
     parser = argparse.ArgumentParser()
     parser.add_argument("-v", required=False, action='store_true', help="Display the version and exit")
     parser.add_argument("-n", required=False, action='store_true', help="Normalize scoring based on length of sample compared to length of PRELUDE_FILE")
@@ -437,11 +395,6 @@ def main():
             results = pool.map(z.run_on_file_chunked, args.sample_files)
         for r in results:
             print(r)
-
-        end_time = time.perf_counter()
-        print(f"total time: {end_time - start_time:0.4f}")
-
-        
         
 if __name__ == '__main__':
     main()
